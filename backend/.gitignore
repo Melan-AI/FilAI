@@ -2,3 +2,5 @@
 datasets/
 myenv/
 /myenv
+
+__pycache__/
