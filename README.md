@@ -2,9 +2,8 @@
 
 ## Decentralized AI-Powered Dataset Analysis & Verification Platform
 
-**Built for EthNigeria 2025 Hackathon**
 
-FileScope AI transforms any dataset into trusted intelligence through advanced AI analysis, anomaly detection, and blockchain verification. Upload your data, get instant insights, and store results permanently on Filecoin for complete transparency.
+FileScope AI transforms any dataset into trusted intelligence through advanced AI analysis, anomaly detection, and blockchain verification. Upload your data, get instant insights, and store results permanently on Filecoin Onchain Cloud for complete transparency.
 
 ---
 
@@ -44,7 +43,7 @@ FileScope AI solves this by providing **AI-powered analysis with blockchain veri
 ### 🔗Key SDK Features
 - Easy dataset upload and analysis via simple function calls
 - Access the same quality scoring, anomaly detection, and bias analysis used in the main platform
-- Direct integration with Filecoin/IPFS for decentralized storage
+- Direct integration with Filecoin Onchain Cloud for decentralized storage
 - Configurable analysis depth and visualization inclusion
 - Lightweight and compatible with Python 3.8+
 
