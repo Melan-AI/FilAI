@@ -415,13 +415,35 @@ const FileScopeApp = () => {
       
       setAnalysisResults(frontendResults); // Store results in state
       
-      // Step 4: Upload dataset to storage (FOC for paid, IPFS for free)
+      // Step 4: Upload dataset to storage (FOC for paid/public, IPFS for private/free)
+      // Public datasets use FOC for better retrievability and verifiable proofs
       let datasetCID: string;
       
-      if (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) {
-        // Paid dataset: Upload to FOC
-        if (!focService) {
-          throw new Error('FOC service not initialized');
+      const useFOC = (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic;
+      
+      if (useFOC) {
+        // Paid or Public dataset: Upload to FOC
+        // Ensure FOC service is initialized (should already be done, but double-check)
+        let serviceToUse = focService;
+        if (!serviceToUse) {
+          if (!window.ethereum) {
+            throw new Error('Ethereum provider not found. Please install MetaMask or another Web3 wallet.');
+          }
+          
+          setCurrentProcessingStep('Initializing Filecoin Cloud service...');
+          toast.loading('Initializing Filecoin Cloud service...', { id: 'foc-init' });
+          
+          try {
+            const service = getFilecoinCloudService();
+            await service.initialize(window.ethereum);
+            setFocService(service);
+            serviceToUse = service;
+            toast.success('Filecoin Cloud service initialized', { id: 'foc-init' });
+            console.log('✅ FOC service initialized during upload');
+          } catch (initError) {
+            toast.error(`Failed to initialize Filecoin Cloud: ${initError instanceof Error ? initError.message : 'Unknown error'}`, { id: 'foc-init' });
+            throw new Error(`Failed to initialize Filecoin Cloud service: ${initError instanceof Error ? initError.message : 'Unknown error'}`);
+          }
         }
 
         // Validate file before upload - ensure it's a real file, not a mock from state restoration
@@ -471,12 +493,12 @@ const FileScopeApp = () => {
           throw new Error('File appears to be empty. Please try uploading again.');
         }
 
-        const focResult = await focService.uploadDataset(fileToUpload, {
+        const focResult = await serviceToUse.uploadDataset(fileToUpload, {
           app: 'filescope-ai',
           datasetName: fileToUpload.name,
           uploadedBy: address || '',
-          isPaid: 'true',
-          priceInFIL: priceInFIL,
+          isPaid: isPaid && priceInFIL && parseFloat(priceInFIL) > 0 ? 'true' : 'false',
+          priceInFIL: priceInFIL || '0',
         });
         
         datasetCID = focResult.pieceCid;
@@ -618,9 +640,14 @@ const FileScopeApp = () => {
     setIsAnalyzing(true);
     setAnalysisProgress(0);
     
-    // Set initial step based on whether it's a paid dataset
-    if (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) {
-      setCurrentProcessingStep('Checking payment setup...');
+    // Set initial step based on whether it's a paid or public dataset
+    const needsFOC = (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic;
+    if (needsFOC) {
+      if (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) {
+        setCurrentProcessingStep('Checking payment setup...');
+      } else {
+        setCurrentProcessingStep('Preparing Filecoin Cloud upload...');
+      }
     } else {
       setCurrentProcessingStep('Preparing upload...');
     }
@@ -639,29 +666,60 @@ const FileScopeApp = () => {
     console.log('📊 About to start analysis flow...');
     
     try {
-      // Step 0: Check payment setup for paid datasets BEFORE starting analysis
-      if (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) {
-        if (!focService) {
-          throw new Error('FOC service not initialized. Please refresh the page.');
+      // Step 0: Initialize FOC service for paid OR public datasets
+      // Public datasets use FOC for better retrievability and verifiable proofs
+      const needsFOC = (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic;
+      
+      if (needsFOC) {
+        // Initialize FOC service if not already initialized
+        let serviceToUse = focService;
+        if (!serviceToUse) {
+          if (!window.ethereum) {
+            throw new Error('Ethereum provider not found. Please install MetaMask or another Web3 wallet.');
+          }
+          
+          setCurrentProcessingStep('Initializing Filecoin Cloud service...');
+          setAnalysisProgress(1);
+          toast.loading('Initializing Filecoin Cloud service...', { id: 'foc-init' });
+          
+          try {
+            const service = getFilecoinCloudService();
+            await service.initialize(window.ethereum);
+            setFocService(service);
+            serviceToUse = service;
+            toast.success('Filecoin Cloud service initialized', { id: 'foc-init' });
+            console.log('✅ FOC service initialized during analysis start');
+          } catch (initError) {
+            toast.error(`Failed to initialize Filecoin Cloud: ${initError instanceof Error ? initError.message : 'Unknown error'}`, { id: 'foc-init' });
+            throw new Error(`Failed to initialize Filecoin Cloud service: ${initError instanceof Error ? initError.message : 'Unknown error'}`);
+          }
         }
 
-        setCurrentProcessingStep('Checking payment setup...');
-        setAnalysisProgress(2);
-        setIsCheckingPayment(true);
-        const paymentStatus = await focService.checkPaymentSetup();
-        setIsCheckingPayment(false);
+        // Check payment setup only for paid datasets (public datasets don't need payment setup)
+        if (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) {
+          setCurrentProcessingStep('Checking payment setup...');
+          setAnalysisProgress(2);
+          setIsCheckingPayment(true);
+          const paymentStatus = await serviceToUse.checkPaymentSetup();
+          setIsCheckingPayment(false);
 
-        if (paymentStatus.needsApproval || paymentStatus.needsDeposit) {
-          // Clear any existing analysis ID since we haven't started analysis yet
-          setCurrentAnalysisId(null);
-          setPendingAnalysisId(null);
-          setShowPaymentSetup(true);
-          setCurrentStep('preview');
-          setIsAnalyzing(false);
-          setCurrentProcessingStep('');
-          clearSavedState(); // Clear saved state since we're not starting analysis yet
-          toast('Payment setup required before upload', { id: 'analysis', icon: 'ℹ️' });
-          return; // Exit early - payment modal will handle continuation
+          if (paymentStatus.needsApproval || paymentStatus.needsDeposit) {
+            // Clear any existing analysis ID since we haven't started analysis yet
+            setCurrentAnalysisId(null);
+            setPendingAnalysisId(null);
+            setShowPaymentSetup(true);
+            setCurrentStep('preview');
+            setIsAnalyzing(false);
+            setCurrentProcessingStep('');
+            clearSavedState(); // Clear saved state since we're not starting analysis yet
+            toast('Payment setup required before upload', { id: 'analysis', icon: 'ℹ️' });
+            return; // Exit early - payment modal will handle continuation
+          }
+        }
+        
+        // Ensure focService state is updated if we just initialized it
+        if (!focService && serviceToUse) {
+          setFocService(serviceToUse);
         }
       }
 
@@ -924,6 +982,26 @@ const FileScopeApp = () => {
     }
   }, [mounted, isConnected, focService]);
 
+  // Proactively initialize FOC service when user enables paid dataset OR public dataset
+  // Public datasets use FOC for better retrievability and verifiable proofs
+  useEffect(() => {
+    const shouldInitialize = (isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic;
+    if (mounted && isConnected && window.ethereum && shouldInitialize && !focService) {
+      const reason = isPaid ? 'paid dataset' : 'public dataset';
+      console.log(`🌐 ${reason === 'paid dataset' ? '💰' : '🌍'} ${reason === 'paid dataset' ? 'Paid' : 'Public'} dataset enabled, initializing FOC service proactively...`);
+      const service = getFilecoinCloudService();
+      service.initialize(window.ethereum)
+        .then(() => {
+          setFocService(service);
+          console.log(`✅ FOC service initialized proactively for ${reason}`);
+        })
+        .catch((error) => {
+          console.error('❌ Failed to initialize FOC service proactively:', error);
+          // Don't show error toast here - it will be handled when user tries to start analysis
+        });
+    }
+  }, [mounted, isConnected, isPaid, priceInFIL, isPublic, focService]);
+
   // Watch for transaction confirmation and navigate to results
   useEffect(() => {
     const hasDatasetHash = ipfsHash || focPieceCid;
@@ -1146,7 +1224,7 @@ const FileScopeApp = () => {
                       analysisProgress >= 10 ? 'text-green-900 dark:text-green-100' : 
                       analysisProgress >= 5 ? 'text-blue-900 dark:text-blue-100' : 'text-gray-600 dark:text-gray-300'
                     }`}>
-                      Step {isPaid && priceInFIL && parseFloat(priceInFIL) > 0 ? '2' : '1'}: File Upload
+                      Step {((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic) ? '2' : '1'}: File Upload
                     </div>
                     <div className={`text-sm ${
                       analysisProgress >= 10 ? 'text-green-700 dark:text-green-300' : 
@@ -1180,7 +1258,7 @@ const FileScopeApp = () => {
                       analysisProgress >= 70 ? 'text-green-900 dark:text-green-100' : 
                       analysisProgress >= 10 ? 'text-blue-900 dark:text-blue-100' : 'text-gray-600 dark:text-gray-300'
                     }`}>
-                      Step {isPaid && priceInFIL && parseFloat(priceInFIL) > 0 ? '3' : '2'}: AI Analysis
+                      Step {((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic) ? '3' : '2'}: AI Analysis
                     </div>
                     <div className={`text-sm ${
                       analysisProgress >= 70 ? 'text-green-700 dark:text-green-300' : 
@@ -1217,21 +1295,21 @@ const FileScopeApp = () => {
                       analysisProgress >= 80 ? 'text-green-900 dark:text-green-100' : 
                       analysisProgress >= 75 ? 'text-blue-900 dark:text-blue-100' : 'text-gray-600 dark:text-gray-300'
                     }`}>
-                      Step {isPaid && priceInFIL && parseFloat(priceInFIL) > 0 ? '4' : '3'}: Dataset Storage
+                      Step {((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic) ? '4' : '3'}: Dataset Storage
                     </div>
                     <div className={`text-sm ${
                       analysisProgress >= 80 ? 'text-green-700 dark:text-green-300' : 
                       analysisProgress >= 75 ? 'text-blue-700 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'
                     }`}>
                       {analysisProgress >= 80 
-                        ? (isPaid 
+                        ? ((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic
                           ? `Dataset stored on Filecoin Onchain Cloud (PieceCID: ${focPieceCid ? focPieceCid.slice(0, 20) + '...' : 'N/A'})` 
                           : `Dataset stored on IPFS (CID: ${ipfsHash ? ipfsHash.slice(0, 20) + '...' : 'N/A'})`)
                         : analysisProgress >= 75 
-                          ? (currentProcessingStep || (isPaid 
+                          ? (currentProcessingStep || ((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic
                             ? 'Uploading to Filecoin Onchain Cloud...' 
                             : 'Uploading to IPFS...'))
-                          : (isPaid 
+                          : ((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic
                             ? 'Waiting to upload to FOC...' 
                             : 'Waiting to upload to IPFS...')}
                     </div>
@@ -1258,7 +1336,7 @@ const FileScopeApp = () => {
                       analysisProgress >= 90 ? 'text-green-900 dark:text-green-100' : 
                       analysisProgress >= 85 ? 'text-blue-900 dark:text-blue-100' : 'text-gray-600 dark:text-gray-300'
                     }`}>
-                      Step {isPaid && priceInFIL && parseFloat(priceInFIL) > 0 ? '5' : '4'}: Analysis Results Storage
+                      Step {((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic) ? '5' : '4'}: Analysis Results Storage
                     </div>
                     <div className={`text-sm ${
                       analysisProgress >= 90 ? 'text-green-700 dark:text-green-300' : 
@@ -1295,7 +1373,7 @@ const FileScopeApp = () => {
                       analysisProgress >= 100 ? 'text-green-900 dark:text-green-100' : 
                       analysisProgress >= 95 ? 'text-blue-900 dark:text-blue-100' : 'text-gray-600 dark:text-gray-300'
                     }`}>
-                      Step {isPaid && priceInFIL && parseFloat(priceInFIL) > 0 ? '6' : '5'}: Blockchain Registration
+                      Step {((isPaid && priceInFIL && parseFloat(priceInFIL) > 0) || isPublic) ? '6' : '5'}: Blockchain Registration
                     </div>
                     <div className={`text-sm ${
                       analysisProgress >= 100 ? 'text-green-700 dark:text-green-300' : 
