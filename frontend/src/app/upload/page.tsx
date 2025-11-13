@@ -1065,7 +1065,32 @@ const FileScopeApp = () => {
   useEffect(() => {
     if (mounted && contractError) {
       console.error('Contract error:', contractError);
-      toast.error(`Contract error: ${contractError.message}`, { id: 'analysis' });
+      
+      // Extract error message
+      const errorMessage = contractError.message || String(contractError);
+      const errorString = errorMessage.toLowerCase();
+      
+      // Check for specific error types
+      let userFriendlyMessage = errorMessage;
+      
+      if (errorString.includes('dataset already registered') || 
+          errorString.includes('already registered') ||
+          errorString.includes('cid already exists')) {
+        userFriendlyMessage = 'This dataset has already been uploaded to the blockchain. Each dataset can only be registered once. Please upload a different file or modify your dataset.';
+      } else if (errorString.includes('insufficient') && errorString.includes('balance')) {
+        userFriendlyMessage = 'Insufficient balance. Please ensure you have enough USDFC tokens to complete the transaction.';
+      } else if (errorString.includes('user rejected') || errorString.includes('user denied')) {
+        userFriendlyMessage = 'Transaction was cancelled. Please try again if you want to proceed.';
+      } else if (errorString.includes('gas') || errorString.includes('out of gas')) {
+        userFriendlyMessage = 'Transaction failed due to insufficient gas. Please try again with a higher gas limit.';
+      } else if (errorString.includes('network') || errorString.includes('connection')) {
+        userFriendlyMessage = 'Network error. Please check your connection and try again.';
+      }
+      
+      toast.error(`Upload failed: ${userFriendlyMessage}`, { 
+        id: 'analysis',
+        duration: 8000 
+      });
       setIsAnalyzing(false);
       setCurrentStep('preview');
       clearSavedState();
@@ -1076,7 +1101,63 @@ const FileScopeApp = () => {
   useEffect(() => {
     if (mounted && receiptError) {
       console.error('Receipt error:', receiptError);
-      toast.error(`Transaction error: ${receiptError.message}`, { id: 'analysis' });
+      
+      // Extract error message - check both message and cause
+      let errorMessage = receiptError.message || String(receiptError);
+      
+      // Check if there's a nested error with more details
+      if (receiptError.cause && typeof receiptError.cause === 'object') {
+        const cause = receiptError.cause as { message?: string; details?: string };
+        if (cause.message) {
+          errorMessage = cause.message;
+        } else if (cause.details) {
+          errorMessage = cause.details;
+        }
+      }
+      
+      const errorString = errorMessage.toLowerCase();
+      
+      // Check for specific error types
+      let userFriendlyMessage = errorMessage;
+      
+      // Check for "Dataset already registered" error in various formats
+      const alreadyRegisteredPatterns = [
+        /dataset already registered/i,
+        /already registered/i,
+        /cid already exists/i,
+        /vm error.*error\(dataset already registered\)/i,
+        /vm error.*\[error\(dataset already registered\)\]/i,
+        /error\(dataset already registered\)/i,
+        /message failed.*dataset already/i
+      ];
+      
+      const isAlreadyRegistered = alreadyRegisteredPatterns.some(pattern => pattern.test(errorMessage));
+      
+      if (isAlreadyRegistered) {
+        userFriendlyMessage = 'This dataset has already been uploaded to the blockchain. Each dataset can only be registered once. If you need to upload this dataset again, please modify the file slightly (e.g., add a comment or change a value) to generate a new CID.';
+      } else if (errorString.includes('revert') || errorString.includes('execution reverted')) {
+        // Try to extract revert reason from various formats
+        const revertMatch = errorMessage.match(/revert reason[:\s]+([^(\n]+)/i) || 
+                          errorMessage.match(/vm error[:\s]*\[error\(([^)]+)\)\]/i) ||
+                          errorMessage.match(/error\(([^)]+)\)/i) ||
+                          errorMessage.match(/vm error[:\s]*=\s*\[error\(([^)]+)\)\]/i);
+        if (revertMatch) {
+          const revertReason = revertMatch[1].trim();
+          if (revertReason.toLowerCase().includes('already registered') || 
+              revertReason.toLowerCase().includes('dataset already')) {
+            userFriendlyMessage = 'This dataset has already been uploaded. Please upload a different file or modify your dataset to generate a new CID.';
+          } else {
+            userFriendlyMessage = `Transaction reverted: ${revertReason}`;
+          }
+        } else {
+          userFriendlyMessage = 'Transaction was reverted by the smart contract. This may happen if the dataset is already registered or if there are validation issues.';
+        }
+      }
+      
+      toast.error(`Transaction failed: ${userFriendlyMessage}`, { 
+        id: 'analysis',
+        duration: 8000 
+      });
       setIsAnalyzing(false);
       setCurrentStep('preview');
       clearSavedState();
