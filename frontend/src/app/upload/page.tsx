@@ -7,6 +7,7 @@ import {
   DollarSign, Cloud
 } from 'lucide-react';
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { ethers } from 'ethers';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { analysisAPI } from '../../services/analysisApi';
@@ -584,27 +585,121 @@ const FileScopeApp = () => {
       console.log('Price in USDFC:', priceInFIL);
       console.log('Price in wei:', priceWei.toString());
       
-      // Call the smart contract with all parameters
-      writeContract({
-        address: fileStoreContract.address as `0x${string}`,
-        abi: fileStoreContract.abi,
-        functionName: 'uploadDataset',
-        args: [
-          datasetCID,           // datasetCID (FOC PieceCID or IPFS CID)
-          analysisCID,          // analysisCID (IPFS CID)
-          isPublic,             // isPublic
-          !isPublic,            // isPrivate (inverse of isPublic for now)
-          isPaid,               // isPaid
-          priceWei,             // priceInFIL (in wei)
-        ],
-      });
+      // Use ethers directly for better gas control
+      if (!window.ethereum) {
+        throw new Error('Ethereum provider not found');
+      }
       
+      const provider = new ethers.BrowserProvider(window.ethereum as unknown as ethers.Eip1193Provider);
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(
+        fileStoreContract.address,
+        fileStoreContract.abi,
+        signer
+      );
+      
+      // Estimate gas first
+      let gasLimit: bigint;
+      try {
+        console.log('⛽ Estimating gas...');
+        const estimatedGas = await contract.uploadDataset.estimateGas(
+          datasetCID,
+          analysisCID,
+          isPublic,
+          !isPublic,
+          isPaid,
+          priceWei
+        );
+        
+        // Add 50% buffer to gas estimate to avoid out of gas errors
+        gasLimit = (estimatedGas * BigInt(150)) / BigInt(100);
+        console.log('✅ Gas estimated:', estimatedGas.toString(), 'Using limit:', gasLimit.toString());
+      } catch (gasError) {
+        console.warn('⚠️ Gas estimation failed, using high fixed limit:', gasError);
+        // Use a high fixed gas limit as fallback (15M gas for Filecoin)
+        gasLimit = BigInt(15000000);
+      }
+      
+      // Call the smart contract with explicit gas limit using ethers
+      console.log('📝 Sending transaction with gas limit:', gasLimit.toString());
+      const tx = await contract.uploadDataset(
+        datasetCID,
+        analysisCID,
+        isPublic,
+        !isPublic,
+        isPaid,
+        priceWei,
+        {
+          gasLimit: gasLimit,
+        }
+      );
+      
+      // Store transaction hash for receipt tracking
+      console.log('✅ Transaction sent:', tx.hash);
       setCurrentProcessingStep('Waiting for transaction confirmation...');
       setAnalysisProgress(95);
-      console.log('✅ Smart contract call initiated...');
-      toast.loading('Waiting for wallet confirmation...', { id: 'analysis' });
+      toast.loading('Waiting for transaction confirmation...', { id: 'analysis' });
       
-      // The useEffect hook will handle navigation when transaction is confirmed
+      // Wait for transaction receipt
+      const receipt = await tx.wait();
+      console.log('✅ Transaction confirmed:', receipt);
+      
+      if (receipt && receipt.status === 1) {
+        // Transaction successful - store data for results page (same format as wagmi flow)
+        console.log('✅ Transaction successful, navigating to results...');
+        
+        // Store results in sessionStorage for the results page (same format as existing useEffect)
+        const resultsData = {
+          results: frontendResults,
+          fileName: uploadedFile?.name || 'dataset',
+          fileSize: uploadedFile?.size || 0,
+          analysisId: currentAnalysisId,
+          timestamp: new Date().toISOString(),
+          isPublic: isPublic,
+          isPaid: isPaid,
+          priceInFIL: priceInFIL,
+          ipfsHash: ipfsHash,
+          focPieceCid: focPieceCid || datasetCID,
+          blockchainData: {
+            transactionHash: tx.hash,
+            blockNumber: receipt.blockNumber?.toString() || 'confirmed',
+            gasUsed: receipt.gasUsed?.toString() || 'N/A',
+            status: 'confirmed'
+          }
+        };
+        
+        sessionStorage.setItem('analysisResults', JSON.stringify(resultsData));
+        
+        // Update progress to 100%
+        setAnalysisProgress(100);
+        
+        const visibilityMsg = isPublic 
+          ? isPaid
+            ? 'Paid dataset uploaded and confirmed on blockchain! 💰'
+            : 'Analysis completed and confirmed on blockchain! 🌐'
+          : 'Analysis completed and confirmed on blockchain! 🔒';
+        toast.success(visibilityMsg, { id: 'analysis' });
+        
+        // Clear saved processing state and IndexedDB
+        clearSavedState();
+        
+        // Also clear IndexedDB explicitly after successful upload
+        const dbService = getIndexedDBService();
+        dbService.deleteFile()
+          .then(() => {
+            console.log('🗑️ Cleared IndexedDB after successful upload');
+          })
+          .catch((error) => {
+            console.error('⚠️ Failed to clear IndexedDB:', error);
+          });
+        
+        // Navigate to results page
+        setTimeout(() => {
+          router.push('/results');
+        }, 1000);
+      } else {
+        throw new Error('Transaction failed or reverted');
+      }
       
     } catch (error) {
       console.error('Analysis monitoring failed:', error);
@@ -1066,25 +1161,78 @@ const FileScopeApp = () => {
     if (mounted && contractError) {
       console.error('Contract error:', contractError);
       
-      // Extract error message
-      const errorMessage = contractError.message || String(contractError);
-      const errorString = errorMessage.toLowerCase();
+      // Extract error message - check nested error structures
+      let errorMessage = contractError.message || String(contractError);
+      
+      // Check for nested error in cause (CallExecutionError -> RpcRequestError)
+      if (contractError.cause && typeof contractError.cause === 'object') {
+        const cause = contractError.cause as { message?: string; details?: string; shortMessage?: string };
+        if (cause.message) {
+          errorMessage = cause.message;
+        } else if (cause.details) {
+          errorMessage = cause.details;
+        } else if (cause.shortMessage) {
+          errorMessage = cause.shortMessage;
+        }
+      }
+      
+      // Also check the full error object for details
+      const errorObj = contractError as { details?: string; shortMessage?: string; data?: unknown };
+      if (errorObj.details) {
+        errorMessage = errorObj.details;
+      } else if (errorObj.shortMessage) {
+        errorMessage = errorObj.shortMessage;
+      }
+      
+      // Convert error object to string to search for nested error messages
+      const errorString = JSON.stringify(contractError).toLowerCase();
+      const messageString = errorMessage.toLowerCase();
+      
+      // Check for "Dataset already registered" error in various formats
+      const alreadyRegisteredPatterns = [
+        /dataset already registered/i,
+        /already registered/i,
+        /cid already exists/i,
+        /vm error.*error\(dataset already registered\)/i,
+        /vm error.*\[error\(dataset already registered\)\]/i,
+        /error\(dataset already registered\)/i,
+        /message failed.*dataset already/i
+      ];
+      
+      const isAlreadyRegistered = alreadyRegisteredPatterns.some(pattern => 
+        pattern.test(errorMessage) || pattern.test(errorString)
+      );
       
       // Check for specific error types
       let userFriendlyMessage = errorMessage;
       
-      if (errorString.includes('dataset already registered') || 
-          errorString.includes('already registered') ||
-          errorString.includes('cid already exists')) {
-        userFriendlyMessage = 'This dataset has already been uploaded to the blockchain. Each dataset can only be registered once. Please upload a different file or modify your dataset.';
-      } else if (errorString.includes('insufficient') && errorString.includes('balance')) {
+      if (isAlreadyRegistered) {
+        userFriendlyMessage = 'This dataset has already been uploaded to the blockchain. Each dataset can only be registered once. If you need to upload this dataset again, please modify the file slightly (e.g., add a comment or change a value) to generate a new CID.';
+      } else if (messageString.includes('insufficient') && messageString.includes('balance')) {
         userFriendlyMessage = 'Insufficient balance. Please ensure you have enough USDFC tokens to complete the transaction.';
-      } else if (errorString.includes('user rejected') || errorString.includes('user denied')) {
+      } else if (messageString.includes('user rejected') || messageString.includes('user denied')) {
         userFriendlyMessage = 'Transaction was cancelled. Please try again if you want to proceed.';
-      } else if (errorString.includes('gas') || errorString.includes('out of gas')) {
-        userFriendlyMessage = 'Transaction failed due to insufficient gas. Please try again with a higher gas limit.';
-      } else if (errorString.includes('network') || errorString.includes('connection')) {
+      } else if (messageString.includes('gas') || 
+                 messageString.includes('out of gas') || 
+                 messageString.includes('syserroutofgas') ||
+                 messageString.includes('syserroutofgas(7)')) {
+        userFriendlyMessage = 'Transaction failed due to insufficient gas. The gas limit was too low. Please try again - we will use a higher gas limit automatically.';
+      } else if (messageString.includes('network') || messageString.includes('connection')) {
         userFriendlyMessage = 'Network error. Please check your connection and try again.';
+      } else if (messageString.includes('revert') || messageString.includes('execution reverted')) {
+        // Try to extract revert reason
+        const revertMatch = errorMessage.match(/vm error[:\s]*=\s*\[error\(([^)]+)\)\]/i) ||
+                          errorMessage.match(/error\(([^)]+)\)/i) ||
+                          errorString.match(/vm error[:\s]*=\s*\[error\(([^)]+)\)\]/i);
+        if (revertMatch) {
+          const revertReason = revertMatch[1].trim();
+          if (revertReason.toLowerCase().includes('already registered') || 
+              revertReason.toLowerCase().includes('dataset already')) {
+            userFriendlyMessage = 'This dataset has already been uploaded. Please upload a different file or modify your dataset to generate a new CID.';
+          } else {
+            userFriendlyMessage = `Transaction reverted: ${revertReason}`;
+          }
+        }
       }
       
       toast.error(`Upload failed: ${userFriendlyMessage}`, { 
