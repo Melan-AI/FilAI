@@ -307,7 +307,29 @@ class AnalysisAPIService {
     }
   }
 
-  // Upload and analyze dataset - SAME AS BEFORE
+  // Helper to detect CORS errors
+  private isCorsError(error: unknown): boolean {
+    if (error instanceof TypeError) {
+      const message = error.message.toLowerCase();
+      return (
+        message.includes('cors') ||
+        message.includes('cross-origin') ||
+        message.includes('networkerror') ||
+        message.includes('failed to fetch') ||
+        message.includes('network request failed')
+      );
+    }
+    return false;
+  }
+
+  // Helper to wait with exponential backoff
+  private async wait(attempt: number, baseDelay: number = 1000): Promise<void> {
+    const delay = baseDelay * Math.pow(2, attempt);
+    const jitter = Math.random() * 0.3 * delay; // Add up to 30% jitter
+    await new Promise(resolve => setTimeout(resolve, delay + jitter));
+  }
+
+  // Upload and analyze dataset with CORS retry logic
   async uploadAndAnalyze(
     file: File, 
     isPublic: boolean = false,
@@ -355,79 +377,158 @@ class AnalysisAPIService {
       reader.readAsText(file);
     }
 
+    // Test connection first with a preflight check
     try {
-      const response = await fetch(fullUrl, {
-        method: 'POST',
+      console.log('🔍 Testing API connection before upload...');
+      const preflightResponse = await fetch(fullUrl, {
+        method: 'OPTIONS',
         headers: {
           'Accept': 'application/json',
+          'Origin': window.location.origin,
         },
-        body: formData,
       });
+      console.log('✅ Preflight check passed:', preflightResponse.status);
+    } catch (preflightError) {
+      console.warn('⚠️ Preflight check failed, but continuing with upload:', preflightError);
+      // Continue anyway - some servers don't respond to OPTIONS
+    }
 
-      console.log('📡 Upload Response Details:');
-      console.log('- Status:', response.status);
-      console.log('- Status Text:', response.statusText);
-      console.log('- URL:', response.url);
+    // Retry logic for CORS and network errors
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Upload Error Response Body:', errorText);
-        
-        let errorMessage = `Upload failed (${response.status}): ${response.statusText}`;
-        
-        try {
-          // The error response might be a JSON string, so we need to parse it
-          let errorJson;
-          if (errorText.startsWith('"') && errorText.endsWith('"')) {
-            // It's a JSON string, parse it first
-            const parsedString = JSON.parse(errorText);
-            errorJson = JSON.parse(parsedString);
-          } else {
-            // It's already a JSON object
-            errorJson = JSON.parse(errorText);
-          }
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.log(`🔄 Retry attempt ${attempt}/${maxRetries} after CORS/network error...`);
+          await this.wait(attempt - 1, 1000); // Exponential backoff: 1s, 2s, 4s
+        }
+
+        const response = await fetch(fullUrl, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+          },
+          body: formData,
+          // Add credentials for CORS if needed
+          credentials: 'omit', // Change to 'include' if backend requires credentials
+        });
+
+        console.log('📡 Upload Response Details:');
+        console.log('- Status:', response.status);
+        console.log('- Status Text:', response.statusText);
+        console.log('- URL:', response.url);
+        console.log('- Headers:', Object.fromEntries(response.headers.entries()));
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ Upload Error Response Body:', errorText);
           
-          if (errorJson.error) {
-            errorMessage = `Server Error: ${errorJson.error}`;
-            if (errorJson.error_code) {
-              errorMessage += ` (Code: ${errorJson.error_code})`;
+          let errorMessage = `Upload failed (${response.status}): ${response.statusText}`;
+          
+          try {
+            // The error response might be a JSON string, so we need to parse it
+            let errorJson;
+            if (errorText.startsWith('"') && errorText.endsWith('"')) {
+              // It's a JSON string, parse it first
+              const parsedString = JSON.parse(errorText);
+              errorJson = JSON.parse(parsedString);
+            } else {
+              // It's already a JSON object
+              errorJson = JSON.parse(errorText);
+            }
+            
+            if (errorJson.error) {
+              errorMessage = `Server Error: ${errorJson.error}`;
+              if (errorJson.error_code) {
+                errorMessage += ` (Code: ${errorJson.error_code})`;
+              }
+            }
+          } catch (parseError) {
+            console.log('Could not parse error response as JSON:', parseError);
+            // If we can't parse it, use the raw error text
+            if (errorText.length < 200) {
+              errorMessage = `Server Error: ${errorText}`;
             }
           }
-        } catch (parseError) {
-          console.log('Could not parse error response as JSON:', parseError);
-          // If we can't parse it, use the raw error text
-          if (errorText.length < 200) {
-            errorMessage = `Server Error: ${errorText}`;
+          
+          // Provide specific guidance based on error type
+          if (response.status === 500) {
+            if (file.type === 'application/json') {
+              errorMessage += '\n\nJSON files might need to be in a specific format. Try converting to CSV or check if your JSON is properly formatted.';
+            } else if (file.size > 50 * 1024 * 1024) { // 50MB
+              errorMessage += '\n\nFile might be too large. Try a smaller file (under 50MB).';
+            } else {
+              errorMessage += '\n\nServer is having trouble processing this file. Try a different file or format.';
+            }
           }
-        }
-        
-        // Provide specific guidance based on error type
-        if (response.status === 500) {
-          if (file.type === 'application/json') {
-            errorMessage += '\n\nJSON files might need to be in a specific format. Try converting to CSV or check if your JSON is properly formatted.';
-          } else if (file.size > 50 * 1024 * 1024) { // 50MB
-            errorMessage += '\n\nFile might be too large. Try a smaller file (under 50MB).';
-          } else {
-            errorMessage += '\n\nServer is having trouble processing this file. Try a different file or format.';
+          
+          // Don't retry on server errors (4xx, 5xx) unless it's a CORS-related status
+          if (response.status >= 400 && response.status < 500 && response.status !== 0) {
+            throw new Error(errorMessage);
           }
+          
+          // For 0 status (CORS error) or network issues, retry
+          lastError = new Error(errorMessage);
+          if (attempt < maxRetries) {
+            continue;
+          }
+          throw lastError;
         }
-        
-        throw new Error(errorMessage);
-      }
 
-      const result = await response.json();
-      console.log('✅ Upload successful! Analysis ID:', result.analysis_id);
-      return result;
-    } catch (error) {
-      console.error('🚨 Upload Error:', error);
-      
-      // If it's a network error, provide helpful guidance
-      if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error: Unable to connect to the analysis server. Please check your internet connection and try again.');
+        const result = await response.json();
+        console.log('✅ Upload successful! Analysis ID:', result.analysis_id);
+        return result;
+      } catch (error) {
+        console.error(`🚨 Upload Error (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // Check if it's a CORS error
+        if (this.isCorsError(error)) {
+          console.warn('⚠️ CORS error detected, will retry...');
+          if (attempt < maxRetries) {
+            continue; // Retry on CORS errors
+          }
+        }
+        
+        // Check if it's a network error
+        if (error instanceof TypeError && (
+          error.message.includes('fetch') ||
+          error.message.includes('network') ||
+          error.message.includes('Failed to fetch')
+        )) {
+          console.warn('⚠️ Network error detected, will retry...');
+          if (attempt < maxRetries) {
+            continue; // Retry on network errors
+          }
+        }
+        
+        // If we've exhausted retries or it's not a retryable error, throw
+        if (attempt >= maxRetries) {
+          // Provide helpful error message
+          if (this.isCorsError(error)) {
+            throw new Error(
+              'CORS error: Unable to connect to the analysis server. ' +
+              'This may be a temporary issue. Please try refreshing the page and uploading again. ' +
+              'If the problem persists, contact support.'
+            );
+          }
+          
+          if (error instanceof TypeError && error.message.includes('fetch')) {
+            throw new Error(
+              'Network error: Unable to connect to the analysis server. ' +
+              'Please check your internet connection and try again. ' +
+              'If the problem persists, the server may be temporarily unavailable.'
+            );
+          }
+          
+          throw lastError;
+        }
       }
-      
-      throw error;
     }
+
+    // This should never be reached, but TypeScript needs it
+    throw lastError || new Error('Upload failed after all retry attempts');
   }
 
   // Get analysis results - USING THE WORKING ENDPOINT

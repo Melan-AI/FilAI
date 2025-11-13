@@ -358,13 +358,13 @@ const FileScope = () => {
                 <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Monetize Your Data</h3>
               </div>
               <p className="text-gray-700 dark:text-gray-300 mb-6 leading-relaxed">
-                Turn your datasets into revenue streams. Set your price, earn TFIL tokens, and let 
+                Turn your datasets into revenue streams. Set your price, earn USDFC tokens, and let 
                 the blockchain handle payments automatically.
               </p>
               <ul className="space-y-3">
                 <li className="flex items-start space-x-3">
                   <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
-                  <span className="text-gray-700 dark:text-gray-300">Set custom prices in TFIL tokens</span>
+                  <span className="text-gray-700 dark:text-gray-300">Set custom prices in USDFC tokens</span>
                 </li>
                 <li className="flex items-start space-x-3">
                   <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />

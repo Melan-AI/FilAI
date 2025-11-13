@@ -88,21 +88,21 @@ const FAQPage = () => {
       id: 'how-to-monetize',
       category: 'monetization',
       question: 'How do I monetize my dataset?',
-      answer: 'When uploading a dataset, enable the "Monetize Dataset" toggle and set a price in TFIL (Test FIL) tokens. Your dataset will be stored on Filecoin Onchain Cloud, and buyers can purchase access. Payments are processed automatically through smart contracts.',
+      answer: 'When uploading a dataset, enable the "Monetize Dataset" toggle and set a price in USDFC tokens. Your dataset will be stored on Filecoin Onchain Cloud, and buyers can purchase access. Payments are processed automatically through smart contracts.',
       icon: DollarSign
     },
     {
       id: 'how-much-earn',
       category: 'monetization',
       question: 'How much can I earn?',
-      answer: 'You set your own price in TFIL (Test FIL) tokens. There\'s no platform fee—you receive 100% of the purchase price. Popular, high-quality datasets with valuable insights tend to generate more revenue.',
+      answer: 'You set your own price in USDFC tokens. There\'s no platform fee—you receive 100% of the purchase price. Popular, high-quality datasets with valuable insights tend to generate more revenue.',
       icon: DollarSign
     },
     {
       id: 'payment-processing',
       category: 'monetization',
       question: 'How are payments processed?',
-      answer: 'Payments are handled automatically through smart contracts on the Filecoin Calibration testnet. When someone purchases your dataset, the TFIL (Test FIL) tokens are transferred directly to you. No intermediaries, no delays.',
+      answer: 'Payments are handled automatically through smart contracts on the Filecoin Calibration testnet. When someone purchases your dataset, the USDFC tokens are transferred directly to you. No intermediaries, no delays.',
       icon: Zap
     },
     {
