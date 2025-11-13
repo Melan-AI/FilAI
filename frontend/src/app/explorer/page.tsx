@@ -1,5 +1,5 @@
 'use client'
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useReadContract, useAccount } from 'wagmi';
 import { 
@@ -30,6 +30,7 @@ interface ContractDataset {
 }
 
 interface DatasetMetadata {
+  isPrivate?: boolean;
   fileName: string;
   fileSize: string;
   rows: number;
@@ -212,7 +213,6 @@ const DatasetExplorer = () => {
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isPurchaseConfirmed, setIsPurchaseConfirmed] = useState(false);
-  const [isApprovalConfirmed, setIsApprovalConfirmed] = useState(false);
 
   // Get all public datasets from contract (already filtered by contract)
   const { data: contractDatasets, isLoading: contractLoading } = useReadContract({
@@ -339,22 +339,24 @@ const DatasetExplorer = () => {
 
         // For other errors, throw immediately
         throw new Error(`Failed to fetch from ${gateway}: ${response.status} ${response.statusText}`);
-      } catch (error: any) {
+      } catch (error: unknown) {
         // CORS errors or network errors - try next gateway
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorName = error instanceof Error ? error.name : '';
         if (
-          error?.message?.includes('CORS') ||
-          error?.message?.includes('Failed to fetch') ||
-          error?.message?.includes('NetworkError') ||
-          error?.name === 'TypeError'
+          errorMessage.includes('CORS') ||
+          errorMessage.includes('Failed to fetch') ||
+          errorMessage.includes('NetworkError') ||
+          errorName === 'TypeError'
         ) {
           console.warn(`CORS/Network error on ${gateway}, trying next gateway...`);
-          lastError = error;
+          lastError = error instanceof Error ? error : new Error(String(error));
           continue;
         }
 
         // For other errors, try next gateway but log it
         console.warn(`Error fetching from ${gateway}:`, error);
-        lastError = error;
+        lastError = error instanceof Error ? error : new Error(String(error));
         continue;
       }
     }
@@ -819,6 +821,11 @@ const DatasetExplorer = () => {
     };
   };
 
+  // Create stable dependency values for useEffect
+  const myPurchasesKey = useMemo(() => Array.from(myPurchases).sort().join(','), [myPurchases]);
+  const isConnectedStable = useMemo(() => isConnected ?? false, [isConnected]);
+  const addressStable = useMemo(() => address ?? '', [address]);
+
   // Process contract data - use getAllPublicDatasets which already filters correctly
   useEffect(() => {
     if (mounted && contractDatasets && !contractLoading) {
@@ -859,7 +866,7 @@ const DatasetExplorer = () => {
               // Map both datasetCID and analysisCID to the dataset ID
               cidToIdMap.set(dataset.datasetCID, datasetId);
               cidToIdMap.set(dataset.analysisCID, datasetId);
-            } catch (error) {
+            } catch {
               // Skip datasets we can't access (private datasets)
               continue;
             }
@@ -1037,10 +1044,9 @@ const DatasetExplorer = () => {
     contractLoading, 
     totalDatasetsCount, 
     fetchIPFSData, 
-    // Convert Set to sorted array for stable dependency comparison
-    Array.from(myPurchases).sort().join(','), 
-    isConnected ?? false, 
-    address ?? ''
+    myPurchasesKey,
+    isConnectedStable, 
+    addressStable
   ]);
 
   // Helper functions
@@ -1087,7 +1093,7 @@ const DatasetExplorer = () => {
 
     // Check if already purchased
     if (dataset.isPurchased) {
-      toast.info('You already own this dataset. Purchases are one-time and grant permanent access. You can download it anytime from the download buttons.');
+      toast('You already own this dataset. Purchases are one-time and grant permanent access. You can download it anytime from the download buttons.', { icon: 'ℹ️' });
       return;
     }
 
@@ -1099,8 +1105,10 @@ const DatasetExplorer = () => {
     setPurchaseModalOpen(true);
   };
 
-  // State for approval flow
+  // State for approval flow (setters are used but getters may not be read in current implementation)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [needsApproval, setNeedsApproval] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [approvalTokenAddress, setApprovalTokenAddress] = useState<`0x${string}` | null>(null);
 
   // Execute purchase transaction with approval using ethers
@@ -1138,7 +1146,7 @@ const DatasetExplorer = () => {
 
     try {
       // Initialize ethers provider
-      const provider = new ethers.BrowserProvider(window.ethereum);
+      const provider = new ethers.BrowserProvider(window.ethereum as unknown as ethers.Eip1193Provider);
       const signer = await provider.getSigner();
 
       // Use USDFC token address for Calibration testnet
@@ -1200,7 +1208,7 @@ const DatasetExplorer = () => {
           toast.loading('Waiting for approval confirmation...', { id: 'approval' });
           await approveTx.wait();
           
-          setIsApprovalConfirmed(true);
+          // Approval confirmed
           setIsApproving(false);
           toast.success('Token approved! Proceeding with purchase...', { id: 'approval' });
           
@@ -1282,8 +1290,9 @@ const DatasetExplorer = () => {
         // Add 30% buffer
         gasLimit = (gasLimit * BigInt(130)) / BigInt(100);
         console.log('✅ Gas estimated:', gasLimit.toString());
-      } catch (gasError: any) {
-        console.warn('⚠️ Gas estimation failed, using fixed limit:', gasError?.message);
+      } catch (gasError: unknown) {
+        const errorMessage = gasError instanceof Error ? gasError.message : String(gasError);
+        console.warn('⚠️ Gas estimation failed, using fixed limit:', errorMessage);
         // If estimation fails, use a high fixed limit
         gasLimit = BigInt(15000000);
       }
@@ -1297,22 +1306,30 @@ const DatasetExplorer = () => {
           paymentTokenAddress
         );
         console.log('✅ Static call passed - transaction should succeed');
-      } catch (staticError: any) {
+      } catch (staticError: unknown) {
         setIsPurchasing(false);
         
         // Try to extract revert reason from ethers error
         let revertReason = 'Transaction would revert';
-        if (staticError?.reason) {
-          revertReason = staticError.reason;
-        } else if (staticError?.error?.data) {
-          // Try to decode the revert reason from error data
-          try {
-            const decoded = contract.interface.parseError(staticError.error.data);
-            revertReason = decoded?.name || revertReason;
-          } catch {
-            revertReason = staticError.error.data;
+        if (staticError && typeof staticError === 'object') {
+          const err = staticError as Record<string, unknown>;
+          if (typeof err.reason === 'string') {
+            revertReason = err.reason;
+          } else if (err.error && typeof err.error === 'object') {
+            const errorData = err.error as Record<string, unknown>;
+            if (errorData.data) {
+              // Try to decode the revert reason from error data
+              try {
+                const decoded = contract.interface.parseError(errorData.data as string);
+                revertReason = decoded?.name || revertReason;
+              } catch {
+                revertReason = String(errorData.data);
+              }
+            }
+          } else if (typeof err.message === 'string') {
+            revertReason = err.message;
           }
-        } else if (staticError?.message) {
+        } else if (staticError instanceof Error) {
           revertReason = staticError.message;
         }
         
@@ -1353,14 +1370,19 @@ const DatasetExplorer = () => {
         setPurchaseModalOpen(false);
         setSelectedDataset(null);
       }, 2000);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setIsPurchasing(false);
       
       // Extract more detailed error information
       let errorMessage = 'Unknown error';
-      if (error?.reason) {
-        errorMessage = error.reason;
-      } else if (error?.message) {
+      if (error && typeof error === 'object') {
+        const err = error as Record<string, unknown>;
+        if (typeof err.reason === 'string') {
+          errorMessage = err.reason;
+        } else if (typeof err.message === 'string') {
+          errorMessage = err.message;
+        }
+      } else if (error instanceof Error) {
         errorMessage = error.message;
       } else if (typeof error === 'string') {
         errorMessage = error;
@@ -1399,16 +1421,17 @@ const DatasetExplorer = () => {
   useEffect(() => {
     if (!purchaseModalOpen) {
       setIsPurchaseConfirmed(false);
-      setIsApprovalConfirmed(false);
+      // Reset approval state
       setNeedsApproval(false);
       setApprovalTokenAddress(null);
     }
   }, [purchaseModalOpen]);
 
   // Helper to check if CID is FOC PieceCID (starts with 'bafk' or similar FOC patterns)
-  const isFOCPieceCID = (cid: string): boolean => {
-    return cid.startsWith('bafk') || cid.length > 60; // FOC PieceCIDs are typically longer
-  };
+  // Helper to check if CID is a FOC PieceCID (currently unused but may be needed in future)
+  // const isFOCPieceCID = (cid: string): boolean => {
+  //   return cid.startsWith('bafk') || cid.length > 60; // FOC PieceCIDs are typically longer
+  // };
 
   // Helper to create professional PDF certificate/document
   const createProfessionalDocument = async (dataset: Dataset): Promise<Blob> => {
@@ -1581,7 +1604,8 @@ const DatasetExplorer = () => {
     doc.text('BLOCKCHAIN', pageWidth / 2, yPos + 6, { align: 'center' });
 
     // Page numbers
-    const pageCount = doc.getNumberOfPages();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pageCount = (doc as any).getNumberOfPages?.() || 1;
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
       doc.setFontSize(8);
@@ -1594,7 +1618,8 @@ const DatasetExplorer = () => {
     return pdfBlob;
   };
 
-  // Helper to create branded README file (kept for backward compatibility)
+  // Helper to create branded README file (currently unused but may be needed in future)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const createBrandedREADME = (dataset: Dataset): string => {
     const timestamp = new Date().toISOString();
     const storageType = dataset.metadata.isPublic && !dataset.metadata.isPrivate 
