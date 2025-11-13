@@ -278,6 +278,16 @@ const DatasetExplorer = () => {
       });
       // Immediately update local state
       setMyPurchases(prev => new Set([...prev, selectedDataset.id]));
+      
+      // Immediately update the datasets array to reflect purchase status
+      setDatasets(prevDatasets => 
+        prevDatasets.map(dataset => 
+          dataset.id === selectedDataset.id 
+            ? { ...dataset, isPurchased: true }
+            : dataset
+        )
+      );
+      
       // Refetch purchases from contract to ensure consistency
       if (isConnected && address) {
         refetchPurchases();
