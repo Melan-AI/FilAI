@@ -80,7 +80,35 @@ WSGI_APPLICATION = 'filescope_ai.wsgi.application'
 
 
 
+# CORS Configuration - Enhanced for better preflight handling
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+
+# Explicitly allow all methods including OPTIONS for preflight
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+# Allow all headers
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+# Preflight cache duration (in seconds)
+CORS_PREFLIGHT_MAX_AGE = 86400  # 24 hours
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -158,8 +186,6 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
-
-CORS_ALLOW_CREDENTIALS = True
 
 
 # Default primary key field type

@@ -213,6 +213,11 @@ const DatasetExplorer = () => {
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isPurchaseConfirmed, setIsPurchaseConfirmed] = useState(false);
+  
+  // State for user balance
+  const [userBalance, setUserBalance] = useState<string | null>(null);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
 
   // Get all public datasets from contract (already filtered by contract)
   const { data: contractDatasets, isLoading: contractLoading } = useReadContract({
@@ -244,6 +249,39 @@ const DatasetExplorer = () => {
     abi: fileStoreContract.abi,
     functionName: 'getAcceptedTokens',
   });
+
+  // Fetch user balance when wallet is connected and modal opens
+  const fetchUserBalance = useCallback(async (paymentTokenAddress: `0x${string}`) => {
+    if (!isConnected || !address || !window.ethereum) {
+      setUserBalance(null);
+      return;
+    }
+
+    setIsLoadingBalance(true);
+    setBalanceError(null);
+
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum as unknown as ethers.Eip1193Provider);
+      const ERC20_ABI = [
+        'function balanceOf(address account) view returns (uint256)',
+        'function decimals() view returns (uint8)',
+      ];
+
+      const tokenContract = new ethers.Contract(paymentTokenAddress, ERC20_ABI, provider);
+      const balance = await tokenContract.balanceOf(address);
+      const decimals = await tokenContract.decimals().catch(() => 18); // Default to 18 if decimals() not available
+      
+      const formattedBalance = ethers.formatUnits(balance, decimals);
+      setUserBalance(formattedBalance);
+      console.log('✅ User balance fetched:', formattedBalance);
+    } catch (error) {
+      console.error('❌ Failed to fetch user balance:', error);
+      setBalanceError('Failed to fetch balance');
+      setUserBalance(null);
+    } finally {
+      setIsLoadingBalance(false);
+    }
+  }, [isConnected, address]);
 
   useEffect(() => {
     setMounted(true);
@@ -1110,6 +1148,31 @@ const DatasetExplorer = () => {
   const [needsApproval, setNeedsApproval] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [approvalTokenAddress, setApprovalTokenAddress] = useState<`0x${string}` | null>(null);
+  
+  // Fetch balance when purchase modal opens
+  useEffect(() => {
+    if (purchaseModalOpen && selectedDataset && isConnected && address) {
+      const USDFC_ADDRESS = '0xb3042734b608a1B16e9e86B374A3f3e389b4cDf0' as `0x${string}`;
+      let paymentTokenAddress: `0x${string}` = USDFC_ADDRESS;
+      
+      if (acceptedTokens && Array.isArray(acceptedTokens) && acceptedTokens.length > 0) {
+        const usdfcInList = acceptedTokens.find((addr: string) => 
+          addr.toLowerCase() === USDFC_ADDRESS.toLowerCase()
+        );
+        if (usdfcInList) {
+          paymentTokenAddress = usdfcInList as `0x${string}`;
+        } else {
+          paymentTokenAddress = acceptedTokens[0] as `0x${string}`;
+        }
+      }
+      
+      fetchUserBalance(paymentTokenAddress);
+    } else if (!purchaseModalOpen) {
+      // Reset balance when modal closes
+      setUserBalance(null);
+      setBalanceError(null);
+    }
+  }, [purchaseModalOpen, selectedDataset, isConnected, address, acceptedTokens, fetchUserBalance]);
 
   // Execute purchase transaction with approval using ethers
   const executePurchase = async () => {
@@ -1183,10 +1246,19 @@ const DatasetExplorer = () => {
 
       const priceInWei = selectedDataset.pricing.priceInFILWei;
       
-      // Check user's token balance first
-      const balance = await tokenContract.balanceOf(address);
-      if (balance < priceInWei) {
-        throw new Error(`Insufficient USDFC balance. You have ${ethers.formatUnits(balance, 18)} USDFC, but need ${ethers.formatUnits(priceInWei, 18)} USDFC.`);
+      // Check user's token balance first with loading state
+      setIsLoadingBalance(true);
+      try {
+        const balance = await tokenContract.balanceOf(address);
+        const balanceFormatted = ethers.formatUnits(balance, 18);
+        setUserBalance(balanceFormatted);
+        
+        if (balance < priceInWei) {
+          setIsLoadingBalance(false);
+          throw new Error(`Insufficient USDFC balance. You have ${balanceFormatted} USDFC, but need ${ethers.formatUnits(priceInWei, 18)} USDFC.`);
+        }
+      } finally {
+        setIsLoadingBalance(false);
       }
 
       // Check current allowance
@@ -1725,7 +1797,9 @@ For questions or support, please visit our platform.
         const focService = getFilecoinCloudService();
         await focService.initialize(window.ethereum);
         const fileData = await focService.downloadDataset(cid);
-        data = new Blob([fileData], { type: 'application/octet-stream' });
+        // Convert Uint8Array to ArrayBuffer for Blob compatibility
+        const arrayBuffer = new Uint8Array(fileData).buffer as ArrayBuffer;
+        data = new Blob([arrayBuffer], { type: 'application/octet-stream' });
       } else {
         // Private dataset - download from IPFS using fallback gateways
         data = await fetchFromIPFS(cid);
@@ -1816,7 +1890,9 @@ For questions or support, please visit our platform.
         const focService = getFilecoinCloudService();
         await focService.initialize(window.ethereum);
         const fileData = await focService.downloadDataset(datasetCID);
-        originalData = new Blob([fileData], { type: 'application/octet-stream' });
+        // Convert Uint8Array to ArrayBuffer for Blob compatibility
+        const arrayBuffer = new Uint8Array(fileData).buffer as ArrayBuffer;
+        originalData = new Blob([arrayBuffer], { type: 'application/octet-stream' });
       } else {
         // Private dataset - download from IPFS using fallback gateways
         originalData = await fetchFromIPFS(datasetCID);
@@ -1889,6 +1965,39 @@ For questions or support, please visit our platform.
                     {selectedDataset.pricing.priceInFIL} USDFC
                   </span>
                 </div>
+                
+                {/* User Balance Display */}
+                {isConnected && address && (
+                  <div className="mt-3 pt-3 border-t border-blue-200 dark:border-blue-700">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-600 dark:text-gray-400">Your Balance:</span>
+                      {isLoadingBalance ? (
+                        <span className="text-gray-500 dark:text-gray-500 flex items-center space-x-1">
+                          <span className="animate-spin">⏳</span>
+                          <span>Loading...</span>
+                        </span>
+                      ) : balanceError ? (
+                        <span className="text-red-600 dark:text-red-400 text-xs">Error loading balance</span>
+                      ) : userBalance !== null ? (
+                        <span className={`font-semibold ${
+                          parseFloat(userBalance) >= parseFloat(selectedDataset.pricing.priceInFIL)
+                            ? 'text-green-600 dark:text-green-400'
+                            : 'text-red-600 dark:text-red-400'
+                        }`}>
+                          {parseFloat(userBalance).toFixed(6)} USDFC
+                        </span>
+                      ) : (
+                        <span className="text-gray-500 dark:text-gray-500">Not available</span>
+                      )}
+                    </div>
+                    {userBalance !== null && !isLoadingBalance && parseFloat(userBalance) < parseFloat(selectedDataset.pricing.priceInFIL) && (
+                      <div className="mt-2 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded p-2">
+                        ⚠️ Insufficient balance. You need {selectedDataset.pricing.priceInFIL} USDFC but only have {parseFloat(userBalance).toFixed(6)} USDFC.
+                      </div>
+                    )}
+                  </div>
+                )}
+                
                 <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">
                   ✓ One-time purchase - permanent access<br />
                   ✓ Download unlimited times after purchase<br />
@@ -1931,10 +2040,15 @@ For questions or support, please visit our platform.
               </button>
               <button
                 onClick={executePurchase}
-                disabled={isPurchasing || isApproving}
+                disabled={isPurchasing || isApproving || isLoadingBalance || (userBalance !== null && parseFloat(userBalance) < parseFloat(selectedDataset.pricing.priceInFIL))}
                 className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
               >
-                {isApproving ? (
+                {isLoadingBalance ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    <span>Checking balance...</span>
+                  </>
+                ) : isApproving ? (
                   <>
                     <span className="animate-spin">⏳</span>
                     <span>Approving token...</span>
@@ -1943,6 +2057,11 @@ For questions or support, please visit our platform.
                   <>
                     <span className="animate-spin">⏳</span>
                     <span>Processing purchase...</span>
+                  </>
+                ) : userBalance !== null && parseFloat(userBalance) < parseFloat(selectedDataset.pricing.priceInFIL) ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>Insufficient Balance</span>
                   </>
                 ) : (
                   <>
@@ -2279,10 +2398,15 @@ For questions or support, please visit our platform.
         </div>
 
         {/* Loading State */}
-        {loading && (
+        {(loading || contractLoading) && (
           <div className="text-center py-12">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600 dark:text-gray-400">Loading datasets...</p>
+            <p className="text-gray-600 dark:text-gray-400">
+              {contractLoading ? 'Loading datasets from blockchain...' : 'Processing datasets...'}
+            </p>
+            {contractLoading && (
+              <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">This may take a moment</p>
+            )}
           </div>
         )}
 
