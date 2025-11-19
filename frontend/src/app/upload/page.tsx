@@ -152,7 +152,7 @@ const FileScopeApp = () => {
     try {
       console.log('🌐 Starting IPFS upload...');
       
-      // Create metadata for IPFS
+      // Create metadata for IPFS (store full analysis results for explorer + attributes for quick preview)
       const metadata = {
         name: file.name,
         description: `AI Analysis Results for ${file.name}`,
@@ -160,7 +160,7 @@ const FileScopeApp = () => {
         attributes: [
           {
             trait_type: "File Type",
-            value: file.type
+            value: file.type || 'application/octet-stream'
           },
           {
             trait_type: "File Size",
@@ -168,17 +168,38 @@ const FileScopeApp = () => {
           },
           {
             trait_type: "Quality Score",
-            value: analysisResults.qualityScore?.overall || 0
+            value: analysisResults?.qualityScore?.overall ?? 0
           },
           {
             trait_type: "Anomalies Found",
-            value: analysisResults.anomalies?.total || 0
+            value: analysisResults?.anomalies?.total ?? 0
+          },
+          {
+            trait_type: "Rows",
+            value: analysisResults?.metadata?.rows ?? 0
+          },
+          {
+            trait_type: "Columns",
+            value: analysisResults?.metadata?.columns ?? 0
           },
           {
             trait_type: "Analysis Date",
             value: new Date().toISOString()
           }
-        ]
+        ],
+        originalFile: {
+          name: file.name,
+          size: file.size,
+          type: file.type
+        },
+        results: analysisResults || {},
+        analysis: {
+          qualityScore: analysisResults?.qualityScore || {},
+          anomalies: analysisResults?.anomalies || {},
+          metadata: analysisResults?.metadata || {},
+          biasMetrics: analysisResults?.biasMetrics || {},
+          insights: analysisResults?.insights || []
+        }
       };
 
       // Upload metadata to IPFS
