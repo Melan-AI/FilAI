@@ -68,7 +68,7 @@ export function ConnectWallet() {
       <button
         onClick={() => handleOpen('Connect')}
         type="button"
-        className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-2.5 rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg font-medium flex items-center space-x-2"
+        className="bg-purple-600 to-indigo-600 text-white px-6 py-2.5 rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg font-medium flex items-center space-x-2"
       >
         <Wallet className="w-4 h-4" />
         <span>{isConnecting ? 'Connecting...' : 'Connect Wallet'}</span>
