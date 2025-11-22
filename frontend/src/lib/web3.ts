@@ -2,7 +2,8 @@ import type { CreateAppKit } from '@reown/appkit/react';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
 import { filecoinCalibration } from '@reown/appkit/networks';
 
-const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+const projectId: any = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+
 
 if (!projectId) {
   throw new Error(
